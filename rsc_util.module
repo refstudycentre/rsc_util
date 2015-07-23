@@ -1,0 +1,118 @@
+<?php
+
+
+///**
+// * Implements hook_filter_info()
+// */
+//function rsc_util_filter_info() {
+//  $filters['filter_rsc_util'] = array(
+//    'title' => t('Parse RSC tag links'),
+//    'description' => t('Parses content, changing [[tag]] into a link to the tag, and tagging the content as neccessary.'),
+//    'process callback' => '_filter_rsc_util',
+//    'settings callback' => '_filter_rsc_util_settings'
+//  );
+//  return $filters;
+//}
+
+
+/**
+ * Implements hook_permission
+ */
+function rsc_util_permission() {
+  $ret = array();
+
+  //admin
+  $ret['Use RSC utilities'] = array(
+    'title' => t('Use RSC utilities')
+  );
+
+  return $ret;
+}
+
+
+/**
+ * Implements hook_menu
+ */
+function rsc_util_menu() {
+
+  // missing files
+  $items['admin/config/media/missing-files'] = array(
+    'title'            => 'Missing files',
+    'description'      => 'View file fields (a.k.a. attachments) for which one or more files are missing (i.e. not present on the file system).',
+    'page callback'    => 'rsc_util_missing_files',
+    'access arguments' => array('Use RSC utilities')
+  );
+
+  return $items;
+}
+
+
+function rsc_util_missing_files() {
+
+  // Find all fields referencing files
+  $file_fields = field_read_fields(array('type'=>'file'));
+
+  // Get the entire file table
+  $files = db_select('file_managed','f')->fields('f')->execute()->fetchAllAssoc('fid');
+
+  // Check if each file exists and add missing files to a table
+  $rows = array();
+  foreach($files as &$file) {
+
+    // from http://drupal.stackexchange.com/a/45302
+    // Get the path of the file on the filesystem
+    if ($wrapper = file_stream_wrapper_get_instance_by_uri($file->uri)) {
+      $path = $wrapper->realpath();
+
+      // check if the file is missing
+      if (!file_exists($path)) {
+
+        // Find entities that reference the file by searching every field of type 'file'
+        $nodes = array();
+        foreach($file_fields as $fieldname => $field) {
+
+          // Find entities that reference this file using this field
+          $query = new EntityFieldQuery();
+          $result = $query->fieldCondition($fieldname, 'fid', $file->fid)->execute();
+          foreach ($result as $entity_type => $entities) {
+            // TODO: support other entity types?
+            if ($entity_type == 'node') {
+              $nodes += $entities;
+            }
+          }
+
+        }
+
+        // Generate links to the nodes
+        $links = "";
+        foreach ($nodes as $node) {
+          $links .= l("Node {$node->nid}","node/{$node->nid}").' ; ';
+        }
+
+        // Add it to the table of missing files
+        $rows[] = array(
+          $file->fid,
+          $file->filename,
+          $path,
+          $links,
+        );
+
+      }
+
+    } else {
+      drupal_set_message(t('Could not get file wrapper for uri !uri',array('!uri'=>$file->uri)),'error');
+    }
+
+  }
+
+  return array(
+    'heading' => array(
+      '#markup' => t('The following files are registered in the Drupal database, but are missing on the filesystem:'),
+    ),
+    'table'   => array(
+      '#theme' => 'table',
+      '#header' => array('fid','filename',t('Expected location'),t('Required by')),
+      '#rows' => $rows,
+    ),
+  );
+}

@@ -1,0 +1,4 @@
+name = RSC Utilities
+description = Various utilities, such as a list of missing files.
+core = 7.x
+package = RSC
