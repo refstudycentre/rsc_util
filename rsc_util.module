@@ -42,7 +42,7 @@ function rsc_util_menu() {
     'title'            => 'Unmanaged files',
     'description'      => 'View files that are present on the filesystem, but are not referenced by a node.',
     'page callback'    => 'rsc_util_unmanaged_files',
-    'page arguments'   => array(0),
+    'page arguments'   => array(4),
     'access arguments' => array('Use RSC utilities')
   );
 
