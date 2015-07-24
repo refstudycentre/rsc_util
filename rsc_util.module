@@ -43,7 +43,67 @@ function rsc_util_menu() {
     'access arguments' => array('Use RSC utilities')
   );
 
+  // unmanaged or extraneous files
+  $items['admin/config/media/unmanaged-files/%'] = array(
+    'title'            => 'Unmanaged files',
+    'description'      => 'View files that are present on the filesystem, but are not referenced by a node.',
+    'page callback'    => 'rsc_util_unmanaged_files',
+    'page arguments'   => array(0),
+    'access arguments' => array('Use RSC utilities')
+  );
+
+  // TODO: a page that tries to match up missing files with unmanaged files
+
   return $items;
+}
+
+
+function rsc_util_unmanaged_files($dir = "") {
+
+  // disallow traversing directory tree upwards
+  if (substr($dir,0,2)=='..') {
+    $dir = "";
+  }
+
+  $rows = array();
+
+  // From http://drupal.stackexchange.com/a/56488/8452
+  if ($wrapper = file_stream_wrapper_get_instance_by_uri('public://'.$dir)) {
+    $realpath = $wrapper->realpath();
+
+    foreach (scandir($realpath) as $entry) {
+      $entrypath = "{$realpath}/{$entry}";
+      if (is_dir($entrypath)) {
+        $rows[] = array(
+          l($entry,"admin/config/media/unmanaged-files/{$entry}"),
+          $entrypath,
+        );
+      } else {
+
+        // Test whether the file is managed by Drupal
+        // TODO: also check this against the field storage (like in rsc_util_missing_files function)
+        if (db_select('file_managed','f')->fields('f')->condition('uri', '%'.db_like($entry), 'LIKE')->execute()->rowCount() == 0) {
+          $rows[] = array($entry, $entrypath);
+        }
+
+      }
+    }
+
+  } else {
+    drupal_set_message(t('Could not determine public files location'),'error');
+  }
+
+  return array(
+    'heading' => array(
+      '#markup' => t('The following files are present on the public filesystem, but not referenced in the Drupal database:'),
+    ),
+    'table'   => array(
+      '#theme' => 'table',
+      '#header' => array('name',t('full path')),
+      '#rows' => $rows,
+    ),
+  );
+
 }
 
 
@@ -68,6 +128,7 @@ function rsc_util_missing_files() {
       if (!file_exists($path)) {
 
         // Find entities that reference the file by searching every field of type 'file'
+        // TODO: compare this information to the file_usage table
         $nodes = array();
         foreach($file_fields as $fieldname => $field) {
 
