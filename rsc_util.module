@@ -105,6 +105,9 @@ function rsc_util_missing_files() {
 
   }
 
+  $filenames = array_column($rows,1);
+  array_multisort($filenames, SORT_ASC, SORT_STRING, $rows);
+
   return array(
     'heading' => array(
       '#markup' => t('The following files are registered in the Drupal database, but are missing on the filesystem:'),
