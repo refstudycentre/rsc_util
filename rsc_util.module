@@ -1,20 +1,6 @@
 <?php
 
 
-///**
-// * Implements hook_filter_info()
-// */
-//function rsc_util_filter_info() {
-//  $filters['filter_rsc_util'] = array(
-//    'title' => t('Parse RSC tag links'),
-//    'description' => t('Parses content, changing [[tag]] into a link to the tag, and tagging the content as neccessary.'),
-//    'process callback' => '_filter_rsc_util',
-//    'settings callback' => '_filter_rsc_util_settings'
-//  );
-//  return $filters;
-//}
-
-
 /**
  * Implements hook_permission
  */
@@ -44,6 +30,14 @@ function rsc_util_menu() {
   );
 
   // unmanaged or extraneous files
+
+  $items['admin/config/media/unmanaged-files'] = array(
+    'title'            => 'Unmanaged files',
+    'description'      => 'View files that are present on the filesystem, but are not referenced by a node.',
+    'page callback'    => 'rsc_util_unmanaged_files',
+    'access arguments' => array('Use RSC utilities')
+  );
+
   $items['admin/config/media/unmanaged-files/%'] = array(
     'title'            => 'Unmanaged files',
     'description'      => 'View files that are present on the filesystem, but are not referenced by a node.',
