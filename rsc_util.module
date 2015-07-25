@@ -22,10 +22,19 @@ function rsc_util_permission() {
 function rsc_util_menu() {
 
   // missing files
+
   $items['admin/config/media/missing-files'] = array(
     'title'            => 'Missing files',
     'description'      => 'View file fields (a.k.a. attachments) for which one or more files are missing (i.e. not present on the file system).',
-    'page callback'    => 'rsc_util_missing_files',
+    'page callback'    => 'rsc_util_missing_files_page',
+    'access arguments' => array('Use RSC utilities')
+  );
+
+  $items['admin/config/media/missing-files-suggest'] = array(
+    'title'            => 'Missing files - suggestions',
+    'description'      => 'Try to find suggested matches for missing files based on file names',
+    'page callback'    => 'drupal_get_form',
+    'page arguments'   => array('rsc_util_missing_files_suggestion_page'),
     'access arguments' => array('Use RSC utilities')
   );
 
@@ -34,14 +43,14 @@ function rsc_util_menu() {
   $items['admin/config/media/unmanaged-files'] = array(
     'title'            => 'Unmanaged files',
     'description'      => 'View files that are present on the filesystem, but are not referenced by a node.',
-    'page callback'    => 'rsc_util_unmanaged_files',
+    'page callback'    => 'rsc_util_unmanaged_files_page',
     'access arguments' => array('Use RSC utilities')
   );
 
   $items['admin/config/media/unmanaged-files/%'] = array(
     'title'            => 'Unmanaged files',
     'description'      => 'View files that are present on the filesystem, but are not referenced by a node.',
-    'page callback'    => 'rsc_util_unmanaged_files',
+    'page callback'    => 'rsc_util_unmanaged_files_page',
     'page arguments'   => array(4),
     'access arguments' => array('Use RSC utilities')
   );
@@ -52,7 +61,49 @@ function rsc_util_menu() {
 }
 
 
-function rsc_util_unmanaged_files($dir = "") {
+function rsc_util_get_unmanaged_files_recursive($dir_uri = 'public://') {
+
+  $unmanaged_files = array();
+
+  if ($dir_wrapper = file_stream_wrapper_get_instance_by_uri($dir_uri)) {
+    $dir_realpath = $dir_wrapper->realpath();
+
+    foreach (scandir($dir_realpath) as $entry) {
+
+      if (substr($entry,0,1) != '.') {
+
+        if (substr($dir_uri,-1,1) != '/') {
+          $dir_uri .= '/';
+        }
+        $entry_uri = $dir_uri.$entry;
+
+        if ($entry_wrapper = file_stream_wrapper_get_instance_by_uri($entry_uri)) {
+          $entry_realpath = $entry_wrapper->realpath();
+
+          if (is_dir($entry_realpath)) {
+            $unmanaged_files = array_merge($unmanaged_files, rsc_util_get_unmanaged_files_recursive($entry_uri.'/'));
+          } else {
+            // Test whether the file is managed by Drupal
+            // TODO: also check this against the field storage (like in rsc_util_missing_files function)
+            if (db_select('file_managed','f')->fields('f')->condition('uri', '%'.db_like($entry), 'LIKE')->execute()->rowCount() == 0) {
+              $unmanaged_files[] = $entry_wrapper;
+            }
+          }
+        }
+
+      }
+
+    }
+
+  } else {
+    drupal_set_message(t('Could not determine public files location'),'error');
+  }
+
+  return $unmanaged_files;
+}
+
+
+function rsc_util_unmanaged_files_page($dir = "") {
 
   // disallow traversing directory tree upwards
   if (substr($dir,0,2)=='..') {
@@ -101,16 +152,13 @@ function rsc_util_unmanaged_files($dir = "") {
 }
 
 
-function rsc_util_missing_files() {
-
-  // Find all fields referencing files
-  $file_fields = field_read_fields(array('type'=>'file'));
+function rsc_util_get_missing_files() {
 
   // Get the entire file table
   $files = db_select('file_managed','f')->fields('f')->execute()->fetchAllAssoc('fid');
 
-  // Check if each file exists and add missing files to a table
-  $rows = array();
+  // Check if each file exists and add missing files to an array
+  $missing_files = array();
   foreach($files as &$file) {
 
     // from http://drupal.stackexchange.com/a/45302
@@ -120,43 +168,67 @@ function rsc_util_missing_files() {
 
       // check if the file is missing
       if (!file_exists($path)) {
-
-        // Find entities that reference the file by searching every field of type 'file'
-        // TODO: compare this information to the file_usage table
-        $nodes = array();
-        foreach($file_fields as $fieldname => $field) {
-
-          // Find entities that reference this file using this field
-          $query = new EntityFieldQuery();
-          $result = $query->fieldCondition($fieldname, 'fid', $file->fid)->execute();
-          foreach ($result as $entity_type => $entities) {
-            // TODO: support other entity types?
-            if ($entity_type == 'node') {
-              $nodes += $entities;
-            }
-          }
-
-        }
-
-        // Generate links to the nodes
-        $links = "";
-        foreach ($nodes as $node) {
-          $links .= l("Node {$node->nid}","node/{$node->nid}").' ; ';
-        }
-
-        // Add it to the table of missing files
-        $rows[] = array(
-          $file->fid,
-          $file->filename,
-          $path,
-          $links,
+        $missing_files[] = array(
+          'file'    => $file,
+          'wrapper' => $wrapper
         );
-
       }
 
     } else {
       drupal_set_message(t('Could not get file wrapper for uri !uri',array('!uri'=>$file->uri)),'error');
     }
+
+  }
+
+  return $missing_files;
+
+}
+
+
+function rsc_util_missing_files_page() {
+
+  // Get all missing files
+  $missing_files = rsc_util_get_missing_files();
+
+  // Find all fields referencing files
+  $file_fields = field_read_fields(array('type'=>'file'));
+
+  // Construct a table row for each file
+  $rows = array();
+  foreach($missing_files as $missing_file) {
+    $file = $missing_file['file'];
+    $wrapper = $missing_file['wrapper'];
+
+    // Find entities that reference the file by searching every field of type 'file'
+    // TODO: compare this information to the file_usage table
+    $nodes = array();
+    foreach($file_fields as $fieldname => $field) {
+
+      // Find entities that reference this file using this field
+      $query = new EntityFieldQuery();
+      $result = $query->fieldCondition($fieldname, 'fid', $file->fid)->execute();
+      foreach ($result as $entity_type => $entities) {
+        // TODO: support other entity types?
+        if ($entity_type == 'node') {
+          $nodes += $entities;
+        }
+      }
+
+    }
+
+    // Generate links to the nodes
+    $links = "";
+    foreach ($nodes as $node) {
+      $links .= l("Node {$node->nid}","node/{$node->nid}").' ; ';
+    }
+
+    // Add it to the table of missing files
+    $rows[] = array(
+      $file->fid,
+      $file->filename,
+      $wrapper->realpath(),
+      $links,
+    );
 
   }
 
@@ -173,4 +245,117 @@ function rsc_util_missing_files() {
       '#rows' => $rows,
     ),
   );
+
+}
+
+
+function rsc_util_missing_files_suggestion_page($form, &$form_state) {
+
+  $missing_files = rsc_util_get_missing_file_suggestions();
+
+  $form['heading'] = array(
+    '#markup' => t('Suggestions for missing files:'),
+  );
+
+  $form['files'] = array();
+  foreach ($missing_files as $missing_file) {
+
+    $suggested_filenames = array();
+    foreach ($missing_file['suggestions'] as $suggestion) {
+      $suggested_filenames[$suggestion->getUri()] = $suggestion->getUri();
+    }
+
+    $suggested_filenames[] = 'None';
+
+    $form['files'][] = array(
+      '#type'    => 'radios',
+      '#title'   => $missing_file['file']->uri,
+      '#options' => $suggested_filenames,
+    );
+
+  }
+
+  $form['submit'] = array(
+    '#type'  => 'submit',
+    '#value' => t('Update selected file references in database'),
+  );
+
+  $form['#tree'] = TRUE;
+
+  return $form;
+
+}
+
+function rsc_util_missing_files_suggestion_page_submit($form, &$form_state) {
+
+//  $changes = array();
+  foreach($form_state['values']['files'] as $i => $uri) {
+    if (null != $uri) {
+//      $changes[] = array(
+//        'src_uri' => $form['files'][$i]['#title'],
+//        'dst_uri' => $uri,
+//      );
+      rsc_util_change_uri($form['files'][$i]['#title'], $uri);
+    }
+  }
+
+}
+
+
+function rsc_util_change_uri($src_uri, $dst_uri) {
+
+  $success = 0;
+
+  $file = db_select('file_managed','f')->fields('f')->condition('uri',$src_uri)->execute()->fetchAssoc();
+  if ($file) {
+
+    $dst_filename = explode('/',$dst_uri)[0];
+
+    $n = db_update('file_managed')
+      ->fields(array(
+        'uri'      => $dst_uri,
+        'filename' => $dst_filename,
+      ))
+      ->condition('uri',$src_uri)
+      ->condition('fid',$file->fid)
+      ->execute();
+
+    if ($n == 1) {
+      $success += 1;
+    } else {
+      drupal_set_message("Error while updating file with uri {$src_uri} to uri {$dst_uri}",'error');
+    }
+
+  } else {
+    drupal_set_message("Cannot find file with uri {$src_uri} in database.",'error');
+  }
+
+  drupal_set_message("{$success} files updated successfully");
+
+}
+
+
+function rsc_util_get_missing_file_suggestions() {
+  // Get all missing files
+  $missing_files = rsc_util_get_missing_files();
+
+  // Get all available unmanaged files
+  $available_files = rsc_util_get_unmanaged_files_recursive();
+
+  // For every missing file, calculate the levenstein distance from each available file
+  foreach ($missing_files as &$missing_file) {
+    $suggestions = array();
+    $distances = array();
+    foreach ($available_files as &$available_file) {
+      $m_filename = $missing_file['file']->uri;
+      $a_filename = $available_file->getUri();
+      $distances[] = levenshtein($m_filename, $a_filename);
+      $suggestions[] = $available_file;
+    }
+    array_multisort($distances, SORT_ASC, SORT_NUMERIC, $suggestions);
+    array_splice($suggestions,3);
+    $missing_file['suggestions'] = $suggestions;
+  }
+
+  return $missing_files;
 }
