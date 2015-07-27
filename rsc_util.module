@@ -175,7 +175,17 @@ function rsc_util_get_missing_files() {
       }
 
     } else {
-      drupal_set_message(t('Could not get file wrapper for uri !uri',array('!uri'=>$file->uri)),'error');
+
+      // Could not load file information. Get the node id that uses the file, if any
+      $nid = rsc_util_get_nids_using_fid($file->fid)[0];
+
+      // Show an error message with details
+      drupal_set_message(t('Could not get file wrapper for uri @uri. fid=@fid. nid=@nid.',array(
+        '@uri' => $file->uri,
+        '@fid' => $file->fid,
+        '@nid' => $nid,
+      )),'error');
+
     }
 
   }
@@ -185,13 +195,49 @@ function rsc_util_get_missing_files() {
 }
 
 
+/**
+ * Search for nodes that use a file, by looking both at the file_usage table and at the field storage
+ * @param $fid The file ID to look for
+ */
+function rsc_util_get_nids_using_fid($fid) {
+
+  $nids = array();
+
+  // Find the nid from the file_usage table
+  $nids += db_select('file_usage','f')
+    ->fields('f',array('id'))
+    ->condition('fid',$fid)
+    ->condition('type','node') # TODO: support other entity types?
+    ->execute()
+    ->fetchCol(0);
+
+  // Find all fields referencing files
+  $file_fields = field_read_fields(array('type'=>'file'));
+
+  // Find entities that reference the file by searching every field of type 'file'
+  foreach($file_fields as $fieldname => $field) {
+
+    // Find entities that reference this file using this field
+    $query = new EntityFieldQuery();
+    $result = $query->fieldCondition($fieldname, 'fid', $fid)->execute();
+    foreach ($result as $entity_type => $entities) {
+      // TODO: support other entity types?
+      if ($entity_type == 'node') {
+        $nids += array_keys($entities);
+      }
+    }
+
+  }
+
+  return $nids;
+
+}
+
+
 function rsc_util_missing_files_page() {
 
   // Get all missing files
   $missing_files = rsc_util_get_missing_files();
-
-  // Find all fields referencing files
-  $file_fields = field_read_fields(array('type'=>'file'));
 
   // Construct a table row for each file
   $rows = array();
@@ -199,27 +245,12 @@ function rsc_util_missing_files_page() {
     $file = $missing_file['file'];
     $wrapper = $missing_file['wrapper'];
 
-    // Find entities that reference the file by searching every field of type 'file'
-    // TODO: compare this information to the file_usage table
-    $nodes = array();
-    foreach($file_fields as $fieldname => $field) {
-
-      // Find entities that reference this file using this field
-      $query = new EntityFieldQuery();
-      $result = $query->fieldCondition($fieldname, 'fid', $file->fid)->execute();
-      foreach ($result as $entity_type => $entities) {
-        // TODO: support other entity types?
-        if ($entity_type == 'node') {
-          $nodes += $entities;
-        }
-      }
-
-    }
+    $nids = rsc_util_get_nids_using_fid($file->fid);
 
     // Generate links to the nodes
     $links = "";
-    foreach ($nodes as $node) {
-      $links .= l("Node {$node->nid}","node/{$node->nid}").' ; ';
+    foreach ($nids as $nid) {
+      $links .= l("Node {$nid}","node/{$nid}").' ; ';
     }
 
     // Add it to the table of missing files
@@ -288,41 +319,39 @@ function rsc_util_missing_files_suggestion_page($form, &$form_state) {
 
 function rsc_util_missing_files_suggestion_page_submit($form, &$form_state) {
 
-//  $changes = array();
+  $success = 0;
+
   foreach($form_state['values']['files'] as $i => $uri) {
     if (null != $uri) {
-//      $changes[] = array(
-//        'src_uri' => $form['files'][$i]['#title'],
-//        'dst_uri' => $uri,
-//      );
-      rsc_util_change_uri($form['files'][$i]['#title'], $uri);
+      if (rsc_util_change_uri($form['files'][$i]['#title'], $uri)) {
+        $success++;
+      }
     }
   }
+
+  drupal_set_message(t("@n files have been updated. They should no longer be listed as missing.",array('@n'=>$success)));
 
 }
 
 
 function rsc_util_change_uri($src_uri, $dst_uri) {
 
-  $success = 0;
-
+  $n = 0;
   $file = db_select('file_managed','f')->fields('f')->condition('uri',$src_uri)->execute()->fetchAssoc();
   if ($file) {
 
     $dst_filename = explode('/',$dst_uri)[0];
 
-    $n = db_update('file_managed')
+    $q = db_update('file_managed')
       ->fields(array(
         'uri'      => $dst_uri,
         'filename' => $dst_filename,
       ))
-      ->condition('uri',$src_uri)
-      ->condition('fid',$file->fid)
-      ->execute();
+      ->condition('fid',$file['fid']);
 
-    if ($n == 1) {
-      $success += 1;
-    } else {
+    $n = $q->execute();
+
+    if ($n != 1) {
       drupal_set_message("Error while updating file with uri {$src_uri} to uri {$dst_uri}",'error');
     }
 
@@ -330,7 +359,7 @@ function rsc_util_change_uri($src_uri, $dst_uri) {
     drupal_set_message("Cannot find file with uri {$src_uri} in database.",'error');
   }
 
-  drupal_set_message("{$success} files updated successfully");
+  return $n;
 
 }
 
@@ -342,18 +371,25 @@ function rsc_util_get_missing_file_suggestions() {
   // Get all available unmanaged files
   $available_files = rsc_util_get_unmanaged_files_recursive();
 
-  // For every missing file, calculate the levenstein distance from each available file
+  // For every missing file, calculate the levenshtein distance from each available file
   foreach ($missing_files as &$missing_file) {
     $suggestions = array();
     $distances = array();
     foreach ($available_files as &$available_file) {
       $m_filename = $missing_file['file']->uri;
       $a_filename = $available_file->getUri();
-      $distances[] = levenshtein($m_filename, $a_filename);
+
+      // A quick hack to make RSC's file finding faster, since all our important files start with public://articles/yyyynnnn
+      if (substr($m_filename,0,26) == substr($a_filename,0,26)) {
+        $distances[] = 0;
+      } else {
+        $distances[] = levenshtein($m_filename, $a_filename,2,2,1);
+      }
+
       $suggestions[] = $available_file;
     }
     array_multisort($distances, SORT_ASC, SORT_NUMERIC, $suggestions);
-    array_splice($suggestions,3);
+    array_splice($suggestions,10);
     $missing_file['suggestions'] = $suggestions;
   }
 
