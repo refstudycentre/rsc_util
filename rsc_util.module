@@ -285,7 +285,9 @@ function rsc_util_missing_files_suggestion_page($form, &$form_state) {
   $missing_files = rsc_util_get_missing_file_suggestions();
 
   $form['heading'] = array(
-    '#markup' => t('Suggestions for missing files:'),
+    '#prefix' => '<p>',
+    '#markup' => t('Suggestions are given for each missing file, by calculating the Levenshtein distance between the URI of each missing file in the datbase and the URI of each unmanaged file on the filesystem. The suggestions are ordered by ascending Levenshtein distance, and the top 10 is shown under each missing file. Select the correct suggestions where applicable, and submit the form to update the reference in the database to point to the existing unmanaged file.'),
+    '#suffix' => '</p>',
   );
 
   $form['files'] = array();
@@ -308,7 +310,7 @@ function rsc_util_missing_files_suggestion_page($form, &$form_state) {
 
   $form['submit'] = array(
     '#type'  => 'submit',
-    '#value' => t('Update selected file references in database'),
+    '#value' => t('Submit'),
   );
 
   $form['#tree'] = TRUE;
