@@ -55,8 +55,6 @@ function rsc_util_menu() {
     'access arguments' => array('Use RSC utilities')
   );
 
-  // TODO: a page that tries to match up missing files with unmanaged files
-
   return $items;
 }
 
