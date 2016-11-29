@@ -135,20 +135,19 @@ function rsc_util_get_missing_files() {
   $missing_files = array();
   foreach($files as &$file) {
 
-    // from http://drupal.stackexchange.com/a/45302
-    // Get the path of the file on the filesystem
-    if ($wrapper = file_stream_wrapper_get_instance_by_uri($file->uri)) {
-      $path = $wrapper->realpath();
+    if (empty($file->uri)) {
 
-      // check if the file is missing
-      if (!file_exists($path)) {
-        $missing_files[] = array(
-          'file'    => $file,
-          'wrapper' => $wrapper
-        );
-      }
+      // Show an error message with details
+      drupal_set_message(t('File fid=@fid has no uri!',array(
+        '@fid' => $file->fid,
+      )),'warning');
 
-    } else {
+      continue; // next file
+
+    }
+
+    $wrapper = file_stream_wrapper_get_instance_by_uri($file->uri);
+    if (!$wrapper) {
 
       // Could not load file information. Get the node id that uses the file, if any
       $nid = rsc_util_get_nids_using_fid($file->fid)[0];
@@ -160,6 +159,18 @@ function rsc_util_get_missing_files() {
         '@nid' => $nid,
       )),'error');
 
+      continue; // next file
+
+    }
+
+    $path = $wrapper->realpath();
+
+    // check if the file is missing
+    if (!file_exists($path)) {
+      $missing_files[] = array(
+        'file'    => $file,
+        'wrapper' => $wrapper
+      );
     }
 
   }
